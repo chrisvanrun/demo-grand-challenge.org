@@ -14,3 +14,7 @@ In the era of Deep Learning, developing robust machine learning solutions to pro
 * Products: Find commercialised machine learning solutions in medical imaging.
 
 If you would like to start your own website, or contribute to the development of the framework, please see [the docs](https://comic.github.io/grand-challenge.org/).
+
+# Demo sources
+## User avatars 
+Freepik ([source 1](https://www.freepik.com/free-vector/creative-hand-drawn-profile-icons-collection_18005892.htm), [source 2](https://www.freepik.com/free-vector/happy-people-avatars_7085154.htm)).
