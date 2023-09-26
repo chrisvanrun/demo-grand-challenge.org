@@ -1130,7 +1130,7 @@ WORKSTATIONS_USER_QUERY_PARAM = "viewAsUser"
 WORKSTATIONS_DISPLAY_SET_PATH_PARAM = "display-set"
 # The name of the network that the workstations will be attached to
 WORKSTATIONS_NETWORK_NAME = os.environ.get(
-    "WORKSTATIONS_NETWORK_NAME", "grand-challengeorg_workstations"
+    "WORKSTATIONS_NETWORK_NAME", "demo-grand-challengeorg_workstations"
 )
 # The total limit on the number of sessions
 WORKSTATIONS_MAXIMUM_SESSIONS = int(

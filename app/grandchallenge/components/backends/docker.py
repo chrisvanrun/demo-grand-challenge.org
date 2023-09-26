@@ -280,23 +280,8 @@ class Service(DockerConnectionMixin):
 
     @property
     def extra_hosts(self):
-        if settings.DEBUG:
-            # The workstation needs to communicate with the django api. In
-            # production this happens automatically via the external DNS, but
-            # when running in debug mode we need to pass through the developers
-            # host via the workstations network gateway
+        return {}  # Just disable this and work via naming the http service gc.localhost as a quick hack
 
-            network = docker_client.inspect_network(
-                name=settings.WORKSTATIONS_NETWORK_NAME
-            )
-            host_docker_internal = network["IPAM"]["Config"][0]["Gateway"]
-
-            return {
-                "gc.localhost": host_docker_internal,
-                "minio.localhost": host_docker_internal,
-            }
-        else:
-            return {}
 
     def logs(self) -> str:
         """Get the container logs for this service."""

@@ -70,7 +70,7 @@ services:
         source: ./app
         target: /app/
 
-  http:
+  gc.localhost:
     image: public.ecr.aws/diag-nijmegen/grand-challenge/http:latest
     environment:
       APP_SERVER_HOST: 'web'
@@ -94,6 +94,9 @@ services:
         condition: service_started
       workstation-proxy:
         condition: service_started
+    networks:
+      - default
+      - workstations
 
   redis:
     image: redis:5.0
