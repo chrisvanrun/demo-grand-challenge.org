@@ -1,6 +1,7 @@
 # Make file and sh should keep their line endings
 *.sh text=auto eol=lf
 Makefile text=auto eol=lf
-
 # Exclude third party code from language analysis
 app/grandchallenge/core/static/vendored/** linguist-vendored
+demo/*.mha filter=lfs diff=lfs merge=lfs -text
+demo/resources/*.mha filter=lfs diff=lfs merge=lfs -text

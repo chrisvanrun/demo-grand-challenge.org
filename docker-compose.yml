@@ -40,6 +40,7 @@ services:
     networks:
       - default
       - components
+      - workstations
 
   web:
     image: public.ecr.aws/diag-nijmegen/grand-challenge/web-test:latest
@@ -83,7 +84,6 @@ services:
       DATA_STORE_PORT: '9000'
     command: >-
         bash -c "envsubst '$$APP_SERVER_HOST $$SERVER_NAME $$SENDFILE_STATUS $$DATA_STORE_HOSTNAME $$DATA_STORE_PORT $$WORKSTATION_PROXY_HOSTNAME $$WORKSTATION_PROXY_HTTP_PORT $$WORKSTATION_PROXY_WEBSOCKET_PORT' < /tmp/nginx.conf.template > /etc/nginx/nginx.conf
-        && openssl req -x509 -newkey rsa:4096 -keyout /etc/ssl/private/privkey.pem -out /etc/ssl/certs/fullchain.pem -days 365 -nodes -subj '/CN=$$SERVER_NAME'
         && nginx -g 'daemon off;'"
     restart: always
     ports:
@@ -94,6 +94,14 @@ services:
         condition: service_started
       workstation-proxy:
         condition: service_started
+    volumes:
+      # Bind the app directory for live reloading in development
+      - type: bind
+        source: ./demo/privkey.pem
+        target: /etc/ssl/private/privkey.pem
+      - type: bind
+        source: ./demo/fullchain.pem
+        target: /etc/ssl/certs/fullchain.pem
     networks:
       - default
       - workstations
