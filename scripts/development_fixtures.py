@@ -2,7 +2,10 @@ import base64
 import json
 import logging
 import os
+import random
+from contextlib import contextmanager
 from datetime import timedelta
+from pathlib import Path
 
 from allauth.account.models import EmailAddress
 from django.conf import settings
@@ -24,7 +27,7 @@ from machina.apps.forum.models import Forum
 from grandchallenge.algorithms.models import Algorithm, AlgorithmImage, Job
 from grandchallenge.anatomy.models import BodyRegion, BodyStructure
 from grandchallenge.archives.models import Archive, ArchiveItem
-from grandchallenge.cases.models import Image
+from grandchallenge.cases.models import Image, ImageFile
 from grandchallenge.challenges.models import Challenge, ChallengeSeries
 from grandchallenge.components.models import (
     ComponentInterface,
@@ -54,6 +57,9 @@ from grandchallenge.workstations.models import Workstation
 
 logger = logging.getLogger(__name__)
 
+DEMO_PATH = Path("/app/demo")
+RESOURCE_PATH = DEMO_PATH / "resources"
+
 DEFAULT_USERS = [
     "demo",
     "demop",
@@ -74,9 +80,7 @@ def run():
     print("🔨 Creating development fixtures 🔨")
 
     if not settings.DEBUG:
-        raise RuntimeError(
-            "Skipping this command, server is not in DEBUG mode."
-        )
+        raise RuntimeError("Skipping this command, server is not in DEBUG mode.")
 
     try:
         users = _create_users(usernames=DEFAULT_USERS)
@@ -86,10 +90,17 @@ def run():
     _set_user_permissions(users)
     _create_task_types_regions_modalities(users)
     _create_workstation(users)
-    algorithm = _create_algorithm_demo(users)
-    _create_demo_challenge(users=users, algorithm=algorithm)
-    _create_reader_studies(users)
-    _create_archive(users)
+
+    challenge = _create_demo_challenge(users=users)
+    algorithm = _create_algorithm_demo(
+        creator=users["algorithm"],
+        editors_group=[users["demo"], users["algorithm"]],
+        users_group=[users["algorithmuser"]],
+    )
+    _create_submissions(challenge=challenge, user=users["demop"], algorithm=algorithm)
+
+    # _create_reader_studies(users)
+
     _create_user_tokens(users)
     _create_github_user_token(users["algorithm"])
     _create_github_webhook_message()
@@ -147,9 +158,7 @@ def _set_user_permissions(users):
     retina_group = Group.objects.get(name=settings.RETINA_GRADERS_GROUP_NAME)
     users["retina"].groups.add(retina_group)
 
-    rs_group = Group.objects.get(
-        name=settings.READER_STUDY_CREATORS_GROUP_NAME
-    )
+    rs_group = Group.objects.get(name=settings.READER_STUDY_CREATORS_GROUP_NAME)
     users["readerstudy"].groups.add(rs_group)
 
     workstation_group = Group.objects.get(
@@ -160,9 +169,7 @@ def _set_user_permissions(users):
         Permission.objects.get(codename="add_workstationconfig")
     )
 
-    algorithm_group = Group.objects.get(
-        name=settings.ALGORITHMS_CREATORS_GROUP_NAME
-    )
+    algorithm_group = Group.objects.get(name=settings.ALGORITHMS_CREATORS_GROUP_NAME)
     users["algorithm"].groups.add(algorithm_group)
 
     add_product_perm = Permission.objects.get(codename="add_product")
@@ -177,42 +184,49 @@ def _create_help_forum():
     Forum.objects.create(name="General", type=Forum.FORUM_POST)
 
 
-def _create_demo_challenge(users, algorithm):
-    demo = Challenge.objects.create(
-        short_name="demo",
-        description="demo project",
-        creator=users["demo"],
-        use_workspaces=True,
-        hidden=False,
-        display_forum_link=True,
-    )
+def _create_demo_challenge(users):
+    with open(RESOURCE_PATH / "miccai2023-logo.png", "rb") as fd:
+        demo = Challenge.objects.create(
+            title="Demo challenge",
+            short_name="demo",
+            description="demo project",
+            creator=users["demo"],
+            use_workspaces=False,
+            hidden=False,
+            display_forum_link=True,
+            logo=File(fd),
+            contact_email="support@grand-challenge.org",
+        )
     demo.add_participant(users["demop"])
 
-    Page.objects.create(
-        challenge=demo, display_title="all", permission_level="ALL"
+    Page.objects.create(challenge=demo, display_title="all", permission_level="ALL")
+    Page.objects.create(challenge=demo, display_title="reg", permission_level="REG")
+    Page.objects.create(challenge=demo, display_title="adm", permission_level="ADM")
+
+    Phase.objects.create(
+        challenge=demo,
+        title="Phase 1",
+        submissions_limit_per_user_per_period=2,
     )
-    Page.objects.create(
-        challenge=demo, display_title="reg", permission_level="REG"
-    )
-    Page.objects.create(
-        challenge=demo, display_title="adm", permission_level="ADM"
+    Phase.objects.create(
+        challenge=demo, title="Phase 2", submissions_limit_per_user_per_period=2
     )
 
-    Phase.objects.create(challenge=demo, title="Phase 1")
-    Phase.objects.create(challenge=demo, title="Phase 2")
-
-    combined = CombinedLeaderboard.objects.create(
-        title="overall", challenge=demo
-    )
+    combined = CombinedLeaderboard.objects.create(title="overall", challenge=demo)
     combined.phases.set(demo.phase_set.all())
 
     for phase_num, phase in enumerate(demo.phase_set.all()):
-
-        assign_perm("create_phase_workspace", users["demop"], phase)
-
         phase.score_title = "Accuracy ± std"
         phase.score_jsonpath = "acc.mean"
         phase.score_error_jsonpath = "acc.std"
+        phase.score_decimal_places = 1
+
+        phase.algorithm_inputs.set(_get_inputs())
+        phase.algorithm_outputs.set(_get_outputs())
+
+        phase.archive = _create_archive(
+            creator=users["demo"], interfaces=_get_inputs(), suffix=phase_num
+        )
         phase.extra_results_columns = [
             {
                 "title": "Dice ± std",
@@ -221,35 +235,100 @@ def _create_demo_challenge(users, algorithm):
                 "order": "desc",
             }
         ]
-        if phase_num == 0:
-            phase.submission_kind = SubmissionKindChoices.ALGORITHM
+        phase.submission_kind = SubmissionKindChoices.ALGORITHM
         phase.save()
 
         method = Method(phase=phase, creator=users["demo"])
-        container = ContentFile(base64.b64decode(b""))
-        method.image.save("test.tar", container)
+
+        with _uploaded_container_image() as container:
+            method.image.save("algorithm_io.tar", container)
+
         method.save()
 
-        if phase_num == 1:
-            submission = Submission(phase=phase, creator=users["demop"])
-            content = ContentFile(base64.b64decode(b""))
-            submission.predictions_file.save("test.csv", content)
-        else:
-            submission = Submission(
-                phase=phase,
-                creator=users["demop"],
-                algorithm_image=algorithm.algorithm_container_images.first(),
-            )
+    return demo
+
+    # if phase_num == 1:
+    #     submission = Submission(phase=phase, creator=users["demop"])
+    #     content = ContentFile(base64.b64decode(b""))
+    #     submission.predictions_file.save("test.csv", content)
+    # else:
+    #     submission = Submission(
+    #         phase=phase,
+    #         creator=users["demop"],
+    #         algorithm_image=algorithm.algorithm_container_images.first(),
+    #     )
+    # submission.save()
+    #
+    # e = Evaluation.objects.create(
+    #     submission=submission, method=method, status=Evaluation.SUCCESS
+    # )
+    #
+    # def create_result(evaluation, result: dict):
+    #     interface = ComponentInterface.objects.get(
+    #         slug="metrics-json-file"
+    #     )
+    #
+    #     try:
+    #         output_civ = evaluation.outputs.get(interface=interface)
+    #         output_civ.value = result
+    #         output_civ.save()
+    #     except ObjectDoesNotExist:
+    #         output_civ = ComponentInterfaceValue.objects.create(
+    #             interface=interface, value=result
+    #         )
+    #         evaluation.outputs.add(output_civ)
+    #
+    # create_result(
+    #     e,
+    #     {
+    #         "acc": {"mean": 0.1 * phase_num, "std": 0.1},
+    #         "dice": {"mean": 0.71, "std": 0.05},
+    #     },
+    # )
+
+
+def _get_inputs():
+    return ComponentInterface.objects.filter(slug__in=["generic-medical-image"])
+
+
+def _get_json_file_inputs():
+    return [
+        ComponentInterface.objects.get_or_create(
+            title="JSON File",
+            relative_path="json-file",
+            kind=ComponentInterface.Kind.ANY,
+            store_in_database=False,
+        )[0]
+    ]
+
+
+def _get_outputs():
+    return ComponentInterface.objects.filter(
+        slug__in=["generic-medical-image", "results-json-file"]
+    )
+
+
+def _create_submissions(challenge, user, algorithm):
+    for phase in challenge.phase_set.all():
+        eval_method = Method.objects.get(phase=phase)
+
+        submission = Submission(
+            phase=phase,
+            creator=user,
+            algorithm_image=algorithm.algorithm_container_images.first(),
+            created=timezone.now() - timedelta(days=random.randint(1, 5)),
+        )
         submission.save()
 
         e = Evaluation.objects.create(
-            submission=submission, method=method, status=Evaluation.SUCCESS
+            submission=submission,
+            method=eval_method,
+            status=Evaluation.SUCCESS,
+            created=timezone.now() - timedelta(days=random.randint(1, 10)),
         )
 
         def create_result(evaluation, result: dict):
-            interface = ComponentInterface.objects.get(
-                slug="metrics-json-file"
-            )
+            interface = ComponentInterface.objects.get(slug="metrics-json-file")
 
             try:
                 output_civ = evaluation.outputs.get(interface=interface)
@@ -264,8 +343,8 @@ def _create_demo_challenge(users, algorithm):
         create_result(
             e,
             {
-                "acc": {"mean": 0.1 * phase_num, "std": 0.1},
-                "dice": {"mean": 0.71, "std": 0.05},
+                "acc": {"mean": 1 * random.random(), "std": 0.5 * random.random()},
+                "dice": {"mean": 0.71 * random.random(), "std": 0.05},
             },
         )
 
@@ -397,7 +476,7 @@ def _create_github_webhook_message():
     GitHubWebhookMessage.objects.create(payload=payload)
 
 
-def _create_algorithm_demo(users):
+def _create_algorithm_demo(creator, editors_group, users_group):
     cases_image = Image(
         name="test_image.mha",
         modality=ImagingModality.objects.get(modality="MR"),
@@ -407,33 +486,36 @@ def _create_algorithm_demo(users):
     )
     cases_image.save()
 
+    algorithm_count = Algorithm.objects.count()
+
     algorithm = Algorithm.objects.create(
-        title="Test Algorithm", logo=create_uploaded_image()
+        title=f"Demo Algorithm {algorithm_count} of {creator.username}",
+        logo=create_uploaded_image(),
     )
-    algorithm.editors_group.user_set.add(users["algorithm"], users["demo"])
-    algorithm.users_group.user_set.add(users["algorithmuser"])
+    algorithm.inputs.set(_get_inputs())
+    algorithm.outputs.set(_get_outputs())
+
+    for u in editors_group:
+        algorithm.editors_group.user_set.add(u)
+    for u in users_group:
+        algorithm.users_group.user_set.add(u)
     algorithm.result_template = (
         "{% for key, value in results.metrics.items() -%}"
         "{{ key }}  {{ value }}"
         "{% endfor %}"
     )
-    detection_interface = ComponentInterface(
+    detection_interface, _ = ComponentInterface.objects.get_or_create(
         store_in_database=False,
         relative_path="detection_results.json",
         slug="detection-results",
         title="Detection Results",
         kind=ComponentInterface.Kind.ANY,
     )
-    detection_interface.save()
     algorithm.outputs.add(detection_interface)
-    algorithm_image = AlgorithmImage(
-        creator=users["algorithm"], algorithm=algorithm
-    )
+    algorithm_image = AlgorithmImage(creator=creator, algorithm=algorithm)
 
     try:
-        with open(
-            os.path.join(settings.SITE_ROOT, "algorithm.tar.gz"), "rb"
-        ) as f:
+        with open(os.path.join(settings.SITE_ROOT, "algorithm.tar.gz"), "rb") as f:
             container = File(f)
             algorithm_image.image.save("test_algorithm.tar", container)
     except FileNotFoundError:
@@ -448,11 +530,7 @@ def _create_algorithm_demo(users):
     ]
 
     detections = [
-        {
-            "detected points": [
-                {"type": "Point", "start": [0, 1, 2], "end": [3, 4, 5]}
-            ]
-        },
+        {"detected points": [{"type": "Point", "start": [0, 1, 2], "end": [3, 4, 5]}]},
         {
             "detected points": [
                 {"type": "Point", "start": [6, 7, 8], "end": [9, 10, 11]}
@@ -465,23 +543,21 @@ def _create_algorithm_demo(users):
         },
     ]
     for res, det in zip(results, detections, strict=True):
-        _create_job_result(users, algorithm_image, cases_image, res, det)
+        _create_job_result(creator, algorithm_image, cases_image, res, det)
 
     return algorithm
 
 
-def _create_job_result(users, algorithm_image, cases_image, result, detection):
+def _create_job_result(creator, algorithm_image, cases_image, result, detection):
     algorithms_job = Job(
-        creator=users["algorithm"],
+        creator=creator,
         algorithm_image=algorithm_image,
         status=Evaluation.SUCCESS,
     )
     algorithms_job.save()
     algorithms_job.inputs.add(
         ComponentInterfaceValue.objects.create(
-            interface=ComponentInterface.objects.get(
-                slug="generic-medical-image"
-            ),
+            interface=ComponentInterface.objects.get(slug="generic-medical-image"),
             image=cases_image,
         )
     )
@@ -496,9 +572,7 @@ def _create_job_result(users, algorithm_image, cases_image, result, detection):
     )
     civ.file.save(
         "detection_results.json",
-        ContentFile(
-            bytes(json.dumps(detection, ensure_ascii=True, indent=2), "utf-8")
-        ),
+        ContentFile(bytes(json.dumps(detection, ensure_ascii=True, indent=2), "utf-8")),
     )
 
     algorithms_job.outputs.add(civ)
@@ -558,31 +632,6 @@ def _create_reader_studies(users):
     answer.save()
 
 
-def _create_archive(users):
-    archive = Archive.objects.create(
-        title="Archive",
-        workstation=Workstation.objects.last(),
-        logo=create_uploaded_image(),
-        description="Test archive",
-    )
-    archive.editors_group.user_set.add(users["archive"])
-    archive.uploaders_group.user_set.add(users["demo"])
-
-    image = Image(
-        name="test_image2.mha",
-        modality=ImagingModality.objects.get(modality="MR"),
-        width=128,
-        height=128,
-        color_space="RGB",
-    )
-    image.save()
-    item = ArchiveItem.objects.create(archive=archive)
-    civ = ComponentInterfaceValue.objects.create(
-        interface=ComponentInterface.objects.get(slug="generic-medical-image"),
-        image=image,
-    )
-    item.values.add(civ)
-
 
 def _create_user_tokens(users):
     # Hard code tokens used in gcapi integration tests
@@ -608,3 +657,49 @@ def _create_user_tokens(users):
         out += f"\t{user} token is: {token}\n"
     out += f"{'*' * 80}\n"
     logger.debug(out)
+
+
+@contextmanager
+def _uploaded_container_image():
+    path = "scripts/algorithm_io.tar"
+    yield from _uploaded_file(path=path)
+
+
+@contextmanager
+def _uploaded_image_file():
+    path = "scripts/image10x10x10.mha"
+    yield from _uploaded_file(path=path)
+
+
+def _uploaded_file(*, path):
+    with open(os.path.join(settings.SITE_ROOT, path), "rb") as f:
+        with ContentFile(f.read()) as content:
+            yield content
+
+
+def _create_archive(*, creator, interfaces, suffix, items=5):
+    a = Archive.objects.create(
+        title=f"Algorithm Evaluation {suffix} Demo Set",
+        logo=create_uploaded_image(),
+        workstation=Workstation.objects.get(slug=settings.DEFAULT_WORKSTATION_SLUG),
+    )
+    a.add_editor(creator)
+
+    for n in range(items):
+        ai = ArchiveItem.objects.create(archive=a)
+        for interface in interfaces:
+            v = ComponentInterfaceValue.objects.create(interface=interface)
+
+            im = Image.objects.create(name=f"Test Image {n}", width=10, height=10)
+            im_file = ImageFile.objects.create(image=im)
+
+            with _uploaded_image_file() as f:
+                im_file.file.save(f"test_image_{n}.mha", f)
+                im_file.save()
+
+            v.image = im
+            v.save()
+
+            ai.values.add(v)
+
+    return a

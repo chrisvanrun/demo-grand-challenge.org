@@ -1185,7 +1185,7 @@ class Question(UUIDModel, OverlaySegmentsMixin):
     )
     required = models.BooleanField(default=True)
     direction = models.CharField(
-        max_length=1, choices=Direction.choices, default=Direction.HORIZONTAL
+        max_length=1, choices=Direction.choices, default=Direction.VERTICAL
     )
     scoring_function = models.CharField(
         max_length=3,

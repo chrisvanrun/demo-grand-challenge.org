@@ -81,7 +81,7 @@ def _get_outputs():
 
 def _create_archive(*, creator, interfaces, suffix, items=5):
     a = Archive.objects.create(
-        title=f"Algorithm Evaluation {suffix} Test Set",
+        title=f"Algorithm Evaluation {suffix} Demo Set",
         logo=create_uploaded_image(),
         workstation=Workstation.objects.get(
             slug=settings.DEFAULT_WORKSTATION_SLUG

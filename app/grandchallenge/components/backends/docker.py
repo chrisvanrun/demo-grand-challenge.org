@@ -335,6 +335,8 @@ class Service(DockerConnectionMixin):
         else:
             ports = {}
 
+        print(f"### TEST ### Service.start", ports)
+
         docker_client.run_container(
             repo_tag=self._exec_image_repo_tag,
             name=self.container_name,

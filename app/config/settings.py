@@ -799,7 +799,7 @@ HAYSTACK_CONNECTIONS = {
 }
 
 FORUMS_MIN_ACCOUNT_AGE_DAYS = int(
-    os.environ.get("FORUMS_MIN_ACCOUNT_AGE_DAYS", "2")
+    os.environ.get("FORUMS_MIN_ACCOUNT_AGE_DAYS", "0")
 )
 FORUMS_CHALLENGE_CATEGORY_NAME = "Challenges"
 MACHINA_BASE_TEMPLATE_NAME = "base.html"
@@ -1139,7 +1139,7 @@ WORKSTATIONS_MAXIMUM_SESSIONS = int(
 # The name of the group whose members will be able to create workstations
 WORKSTATIONS_CREATORS_GROUP_NAME = "workstation_creators"
 WORKSTATIONS_SESSION_DURATION_LIMIT = int(
-    os.environ.get("WORKSTATIONS_SESSION_DURATION_LIMIT", "10000")
+    os.environ.get("WORKSTATIONS_SESSION_DURATION_LIMIT", "999999")
 )
 # Which regions are available for workstations to run in
 WORKSTATIONS_ACTIVE_REGIONS = os.environ.get(

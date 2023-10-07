@@ -97,9 +97,10 @@ minio:
 		web \
 		bash -c "python manage.py runscript minio"
 
-development_fixtures:
+development_fixtures: scripts/algorithm_io.tar
 	docker compose run \
 		-v $(shell readlink -f ./scripts/):/app/scripts:ro \
+		-v $(shell readlink -f ./demo/):/app/demo:ro \
 		--rm \
 		web \
 		bash -c "python manage.py migrate && python manage.py runscript minio development_fixtures"
